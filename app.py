@@ -6,11 +6,11 @@ import mediapipe as mp
 import pickle
 from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoProcessorBase
 import os
+
+# Fix for MediaPipe + WebRTC
 os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
-import cv2
 
-
-# ---- TFLITE IMPORT ----
+# ---- LOAD TFLITE ----
 try:
     import tensorflow.lite as tflite
     Interpreter = tflite.Interpreter
@@ -18,34 +18,33 @@ except:
     import tensorflow as tf
     Interpreter = tf.lite.Interpreter
 
-# ---- PAGE UI ----
+
+# ---- PAGE SETUP ----
 st.set_page_config(page_title="ISL Translator", page_icon="🖐️", layout="wide")
 st.title("🖐️ Indian Sign Language – Real-Time Translator")
 
-st.write("Live ISL Gesture to Text translation using MediaPipe + TFLite LSTM model.")
+st.write("Live gesture translation using MediaPipe + TFLite LSTM Model.")
 
-# ---- LOAD RESOURCES ----
+
+# ---- LOAD MODEL + LABELS ----
 @st.cache_resource
 def load_resources():
-    try:
-        with open("label_map.pkl", "rb") as f:
-            label_to_idx = pickle.load(f)
-            idx_to_label = {v: k for k, v in label_to_idx.items()}
+    with open("label_map.pkl", "rb") as f:
+        label_to_idx = pickle.load(f)
+        idx_to_label = {v: k for k, v in label_to_idx.items()}
 
-        interpreter = Interpreter(model_path="isl_gesture_model.tflite")
-        interpreter.allocate_tensors()
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
+    interpreter = Interpreter(model_path="isl_gesture_model.tflite")
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
 
-        return idx_to_label, interpreter, input_details, output_details
-    except Exception as e:
-        st.error(f"❌ Failed to load model/resources: {e}")
-        return None, None, None, None
+    return idx_to_label, interpreter, input_details, output_details
 
 
 idx_to_label, interpreter, input_details, output_details = load_resources()
 
-# ---- SENTENCE STATE ----
+
+# ---- TEXT HISTORY ----
 if "translated_sentence" not in st.session_state:
     st.session_state.translated_sentence = ""
 
@@ -67,7 +66,7 @@ class TFLiteProcessor(VideoProcessorBase):
         self.sequence = []
         self.last_pred = "Waiting..."
         self.last_conf = 0.0
-        self.last_final = None  # add to sentence only when stable
+        self.last_final = None
 
     def extract_features(self, results):
         vec = []
@@ -88,7 +87,7 @@ class TFLiteProcessor(VideoProcessorBase):
             else:
                 vec.extend([0.0] * 63)
 
-        # Palm base
+        # Palm base of both hands
         for hand in [results.left_hand_landmarks, results.right_hand_landmarks]:
             if hand:
                 lm = hand.landmark[0]
@@ -104,13 +103,12 @@ class TFLiteProcessor(VideoProcessorBase):
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = self.holistic.process(img_rgb)
 
-        # Draw
         if results.left_hand_landmarks:
             self.mp_drawing.draw_landmarks(img, results.left_hand_landmarks, self.mp_holistic.HAND_CONNECTIONS)
         if results.right_hand_landmarks:
             self.mp_drawing.draw_landmarks(img, results.right_hand_landmarks, self.mp_holistic.HAND_CONNECTIONS)
 
-        # Extract features
+        # Extract feature sequence
         feat = self.extract_features(results)
         self.sequence.append(feat)
         self.sequence = self.sequence[-32:]
@@ -119,40 +117,29 @@ class TFLiteProcessor(VideoProcessorBase):
         if len(self.sequence) == 32:
             seq = np.expand_dims(np.array(self.sequence, dtype=np.float32), axis=0)
 
-            try:
-                interpreter.set_tensor(input_details[0]['index'], seq)
-                interpreter.invoke()
-                preds = interpreter.get_tensor(output_details[0]['index'])[0]
+            interpreter.set_tensor(input_details[0]['index'], seq)
+            interpreter.invoke()
+            preds = interpreter.get_tensor(output_details[0]['index'])[0]
 
-                idx = int(np.argmax(preds))
-                self.last_pred = idx_to_label.get(idx, "Unknown")
-                self.last_conf = float(preds[idx]) * 100
+            idx = int(np.argmax(preds))
+            self.last_pred = idx_to_label.get(idx, "Unknown")
+            self.last_conf = float(preds[idx]) * 100
 
-                # Add to sentence if stable prediction
-                if self.last_conf > 70 and self.last_pred != "Unknown":
-                    if self.last_pred != self.last_final:
-                        st.session_state.translated_sentence += " " + self.last_pred
-                        self.last_final = self.last_pred
+            # Add to sentence when prediction stable
+            if self.last_conf > 70 and self.last_pred != "Unknown":
+                if self.last_pred != self.last_final:
+                    st.session_state.translated_sentence += " " + self.last_pred
+                    self.last_final = self.last_pred
 
-            except:
-                pass
-
-        # Draw bar
+        # Draw prediction bar
         cv2.rectangle(img, (0, 0), (800, 40), (0, 0, 0), -1)
-        cv2.putText(
-            img,
-            f"{self.last_pred} ({self.last_conf:.1f}%)",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 255, 255),
-            2
-        )
+        cv2.putText(img, f"{self.last_pred} ({self.last_conf:.1f}%)", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 
-# ---- WebRTC ----
+# ---- WEBRTC ----
 rtc_configuration = RTCConfiguration(
     {
         "iceServers": [
@@ -183,7 +170,7 @@ with col1:
     )
 
 with col2:
-    st.subheader("📝 Generated Translation")
+    st.subheader("📝 Translation Output")
     st.write(st.session_state.translated_sentence)
 
     if st.button("Clear Text"):
