@@ -14,13 +14,15 @@ import pickle
 from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoProcessorBase
 
 # ---- 2. LOAD TFLITE (Lighter than full TensorFlow) ----
+# ---- LOAD TFLITE ----
 try:
-    import tensorflow.lite as tflite
+    # Try loading the lightweight runtime first
+    import tflite_runtime.interpreter as tflite
     Interpreter = tflite.Interpreter
 except ImportError:
-    import tensorflow as tf
-    Interpreter = tf.lite.Interpreter
-
+    # Fallback (but this shouldn't happen if requirements.txt is fixed)
+    import tensorflow.lite as tflite
+    Interpreter = tflite.Interpreter
 # ---- PAGE SETUP ----
 st.set_page_config(page_title="ISL Translator", page_icon="🖐️", layout="wide")
 st.title("🖐️ Indian Sign Language – Real-Time Translator")
