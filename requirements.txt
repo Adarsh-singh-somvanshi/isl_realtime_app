@@ -4,5 +4,4 @@ opencv-python-headless==4.7.0.72
 mediapipe==0.10.14
 av==11.0.0
 numpy==1.26.4
-protobuf==3.20.3
 tensorflow-cpu==2.12.1
