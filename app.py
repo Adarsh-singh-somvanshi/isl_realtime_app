@@ -1,12 +1,9 @@
 import os
 
-# ---- MEMORY & PERFORMANCE OPTIMIZATIONS (Must be at the very top) ----
-# 1. Disable GPU (Forces CPU mode to save VRAM/RAM)
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-# 2. Reduce TensorFlow startup logs
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-# 3. Fix for MediaPipe + WebRTC issues on cloud servers
-os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
+# ---- 1. MEMORY OPTIMIZATIONS (Must be at the very top) ----
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"        # Disable GPU to save VRAM
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"         # Reduce TensorFlow logs
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0" # WebRTC fix
 
 import streamlit as st
 import cv2
@@ -16,7 +13,7 @@ import mediapipe as mp
 import pickle
 from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoProcessorBase
 
-# ---- LOAD TFLITE ----
+# ---- 2. LOAD TFLITE (Lighter than full TensorFlow) ----
 try:
     import tensorflow.lite as tflite
     Interpreter = tflite.Interpreter
@@ -28,45 +25,59 @@ except ImportError:
 st.set_page_config(page_title="ISL Translator", page_icon="🖐️", layout="wide")
 st.title("🖐️ Indian Sign Language – Real-Time Translator")
 
-st.write("Live gesture translation using MediaPipe + TFLite LSTM Model.")
+# ---- CUSTOM DRAWING FUNCTION (Replaces mp_drawing to save RAM) ----
+def draw_landmarks_fast(image, landmarks, connections, color=(0, 255, 0)):
+    if not landmarks:
+        return
+    h, w, _ = image.shape
+    
+    # Convert landmarks to pixel coordinates
+    points = {}
+    for idx, lm in enumerate(landmarks.landmark):
+        cx, cy = int(lm.x * w), int(lm.y * h)
+        points[idx] = (cx, cy)
+        # Draw Keypoints (Small circles)
+        cv2.circle(image, (cx, cy), 3, color, -1)
 
-# ---- LOAD MODEL + LABELS ----
+    # Draw Connections (Lines)
+    if connections:
+        for start_idx, end_idx in connections:
+            if start_idx in points and end_idx in points:
+                cv2.line(image, points[start_idx], points[end_idx], color, 2)
+
+# ---- LOAD RESOURCES ----
 @st.cache_resource
-def load_resources():
+def load_model():
     # Load Label Map
     with open("label_map.pkl", "rb") as f:
         label_to_idx = pickle.load(f)
         idx_to_label = {v: k for k, v in label_to_idx.items()}
 
-    # Load TFLite Model
-    # num_threads=1 reduces CPU spike on the free tier
+    # Load TFLite Model (Single thread to prevent CPU spikes)
     interpreter = Interpreter(model_path="isl_gesture_model.tflite", num_threads=1)
     interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-
-    return idx_to_label, interpreter, input_details, output_details
+    return idx_to_label, interpreter
 
 try:
-    idx_to_label, interpreter, input_details, output_details = load_resources()
+    idx_to_label, interpreter = load_model()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
 except Exception as e:
-    st.error(f"Error loading model: {e}")
+    st.error(f"Error loading resources: {e}")
     st.stop()
 
-# ---- TEXT HISTORY ----
 if "translated_sentence" not in st.session_state:
     st.session_state.translated_sentence = ""
 
 # ---- VIDEO PROCESSOR ----
 class TFLiteProcessor(VideoProcessorBase):
     def __init__(self):
-        # Initialize MediaPipe Holistic
         self.mp_holistic = mp.solutions.holistic
-        self.mp_drawing = mp.solutions.drawing_utils
+        # NOTE: We removed mp.solutions.drawing_utils to save memory
 
         self.holistic = self.mp_holistic.Holistic(
             static_image_mode=False,
-            model_complexity=0, # Changed to 0 for better performance on free tier
+            model_complexity=0, # Critical for Free Tier performance
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
@@ -78,7 +89,6 @@ class TFLiteProcessor(VideoProcessorBase):
 
     def extract_features(self, results):
         vec = []
-
         # Shoulders
         if results.pose_landmarks:
             for idx in [11, 12]:
@@ -94,76 +104,63 @@ class TFLiteProcessor(VideoProcessorBase):
                     vec.extend([lm.x, lm.y, lm.z])
             else:
                 vec.extend([0.0] * 63)
-
-        # Palm base of both hands
+        
+        # Palm base
         for hand in [results.left_hand_landmarks, results.right_hand_landmarks]:
             if hand:
                 lm = hand.landmark[0]
                 vec.extend([lm.x, lm.y, lm.z])
             else:
                 vec.extend([0.0] * 3)
-
+                
         return np.array(vec, dtype=np.float32)
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-
-        # Performance fix: flag as not writeable to pass by reference
+        
         img.flags.writeable = False
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = self.holistic.process(img_rgb)
         img.flags.writeable = True
 
-        # Draw Landmarks
+        # Fast Drawing (OpenCV instead of Matplotlib)
         if results.left_hand_landmarks:
-            self.mp_drawing.draw_landmarks(img, results.left_hand_landmarks, self.mp_holistic.HAND_CONNECTIONS)
+            draw_landmarks_fast(img, results.left_hand_landmarks, 
+                              self.mp_holistic.HAND_CONNECTIONS, (255, 0, 0)) # Blue for left
         if results.right_hand_landmarks:
-            self.mp_drawing.draw_landmarks(img, results.right_hand_landmarks, self.mp_holistic.HAND_CONNECTIONS)
+            draw_landmarks_fast(img, results.right_hand_landmarks, 
+                              self.mp_holistic.HAND_CONNECTIONS, (0, 255, 0)) # Green for right
 
-        # Extract feature sequence
+        # Prediction Logic
         feat = self.extract_features(results)
         self.sequence.append(feat)
         self.sequence = self.sequence[-32:]
 
-        # Predict
         if len(self.sequence) == 32:
             seq = np.expand_dims(np.array(self.sequence, dtype=np.float32), axis=0)
-
             interpreter.set_tensor(input_details[0]['index'], seq)
             interpreter.invoke()
             preds = interpreter.get_tensor(output_details[0]['index'])[0]
-
+            
             idx = int(np.argmax(preds))
             self.last_pred = idx_to_label.get(idx, "Unknown")
             self.last_conf = float(preds[idx]) * 100
 
-            # Add to sentence when prediction stable
             if self.last_conf > 80 and self.last_pred != "Unknown":
                 if self.last_pred != self.last_final:
-                    # NOTE: Updating session state here works for logic, 
-                    # but won't refresh UI automatically without a button press
-                    # because this runs in a background thread.
                     st.session_state.translated_sentence += " " + self.last_pred
                     self.last_final = self.last_pred
 
-        # Draw prediction bar
+        # Draw UI
         cv2.rectangle(img, (0, 0), (800, 40), (0, 0, 0), -1)
         cv2.putText(img, f"{self.last_pred} ({self.last_conf:.1f}%)", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
+# ---- WEBRTC SETUP ----
+rtc_configuration = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
-# ---- WEBRTC ----
-rtc_configuration = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-        ]
-    }
-)
-
-# ---- LAYOUT ----
 col1, col2 = st.columns(2)
 
 with col1:
@@ -177,9 +174,8 @@ with col1:
 
 with col2:
     st.subheader("📝 Translation Output")
-    st.info("Note: Due to cloud threading limits, text may update only when you interact with the app.")
+    st.info("Text updates when you stop speaking/gesturing.")
     st.write(st.session_state.translated_sentence)
-
     if st.button("Clear Text"):
         st.session_state.translated_sentence = ""
         st.rerun()
