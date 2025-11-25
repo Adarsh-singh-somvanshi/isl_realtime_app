@@ -1,9 +1,9 @@
 import os
 
-# ---- 1. MEMORY OPTIMIZATIONS (Must be at the very top) ----
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"        # Disable GPU to save VRAM
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"         # Reduce TensorFlow logs
-os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0" # WebRTC fix
+# ---- 1. CRITICAL MEMORY SETTINGS (Must be at the very top) ----
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"        # Force CPU mode (No GPU)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"         # Reduce logs
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0" 
 
 import streamlit as st
 import cv2
@@ -13,20 +13,16 @@ import mediapipe as mp
 import pickle
 from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoProcessorBase
 
-# ---- 2. LOAD TFLITE (Lighter than full TensorFlow) ----
-# ---- LOAD TFLITE ----
-try:
-    # Try loading the lightweight runtime first
-    import tflite_runtime.interpreter as tflite
-    Interpreter = tflite.Interpreter
-except ImportError:
-    # Fallback (but this shouldn't happen if requirements.txt is fixed)
-    import tensorflow.lite as tflite
-    Interpreter = tflite.Interpreter
+# ---- 2. IMPORT TENSORFLOW ----
+# We use the full library because your model requires Flex Delegates
+import tensorflow as tf
+Interpreter = tf.lite.Interpreter
+
 # ---- PAGE SETUP ----
 st.set_page_config(page_title="ISL Translator", page_icon="🖐️", layout="wide")
 st.title("🖐️ Indian Sign Language – Real-Time Translator")
 
+# ... (The rest of your code remains the same as the optimized version I gave you)
 # ---- CUSTOM DRAWING FUNCTION (Replaces mp_drawing to save RAM) ----
 def draw_landmarks_fast(image, landmarks, connections, color=(0, 255, 0)):
     if not landmarks:
