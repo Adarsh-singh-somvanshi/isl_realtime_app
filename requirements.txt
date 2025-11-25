@@ -1,8 +1,8 @@
-streamlit==1.31.1
-streamlit-webrtc==0.47.7
-opencv-python-headless==4.7.0.72
-mediapipe==0.9.0.1
-av==10.0.0
-numpy==1.23.5
+streamlit==1.38.0
+streamlit-webrtc==0.47.6
+opencv-python-headless==4.10.0.84
+mediapipe==0.10.14
+av==12.3.0
+numpy==1.26.4
 protobuf==3.20.3
-tensorflow-cpu==2.12.0
+tensorflow-cpu==2.12.1
