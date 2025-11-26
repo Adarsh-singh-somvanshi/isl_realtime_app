@@ -159,7 +159,14 @@ class TFLiteProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # ---- WEBRTC SETUP ----
-rtc_configuration = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+# ---- WEBRTC SETUP ----
+WEBRTC_CONFIG = {
+    "iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]}
+    ]
+}
+
+rtc_configuration = RTCConfiguration(WEBRTC_CONFIG)
 
 col1, col2 = st.columns(2)
 
