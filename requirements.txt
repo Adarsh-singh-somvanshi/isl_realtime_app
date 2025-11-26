@@ -1,7 +1,6 @@
 streamlit==1.38.0
 streamlit-webrtc==0.47.6
 opencv-python-headless==4.7.0.72
-mediapipe-silicon==0.9.1
 av==12.3.0
 numpy==1.26.4
 tflite-runtime==2.14.0
