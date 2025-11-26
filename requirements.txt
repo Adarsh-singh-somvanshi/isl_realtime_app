@@ -5,9 +5,9 @@ opencv-python-headless==4.9.0.80
 mediapipe==0.10.14
 
 av==10.0.0
-
 numpy==1.25.2
-tensorflow-cpu==2.15.0
+
+tflite-runtime==2.14.0
 
 protobuf==4.23.4
 
