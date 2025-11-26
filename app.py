@@ -1,5 +1,7 @@
 import os
 
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 # ---- 1. CRITICAL MEMORY SETTINGS (Must be at the very top) ----
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"        # Force CPU mode (No GPU)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"         # Reduce logs
