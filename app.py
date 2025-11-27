@@ -17,7 +17,7 @@ RTC_CONFIG = RTCConfiguration(
     {
         "iceServers": [
             {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:global.stun.twilio.com:3478?transport=udp"]},
+            {"urls": ["stun:global.stun.twilio.com:3478"]},
             {
                 "urls": ["turn:relay1.expressturn.com:3478"],
                 "username": "expressturn",
@@ -26,6 +26,7 @@ RTC_CONFIG = RTCConfiguration(
         ]
     }
 )
+
 
 # -------------------------
 # Helper: Check Model Integrity
