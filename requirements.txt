@@ -1,11 +1,17 @@
-streamlit==1.38.0
-streamlit-webrtc==0.47.6
-opencv-python-headless==4.10.0.84
-# FIX: av 9.2.0 has pre-built wheels and is stable. No build errors.
-av==9.2.0
+# CORE UPGRADES: This fixes the "Async/NoneType" crash
+streamlit>=1.40.0
+streamlit-webrtc>=0.50.0
+
+# VIDEO LIBRARY: Let pip pick the latest stable version (av 12+)
+av
+
+# COMPUTER VISION
+opencv-python-headless
+
 # COMPATIBILITY: Numpy must be < 2.0 to avoid TensorFlow crashes
 numpy<2.0.0
-# LIGHTWEIGHT: Use CPU version to save RAM
+
+# MACHINE LEARNING
 tensorflow-cpu==2.15.0
 protobuf==4.25.3
 scikit-learn
