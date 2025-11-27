@@ -4,10 +4,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import streamlit as st
-import av
 import cv2
 import numpy as np
 import json
+import av
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
 # NOTE: We do NOT import tensorflow globally. It is imported inside load_model().
@@ -21,17 +21,15 @@ def check_model_file(model_path):
         st.stop()
     
     file_size = os.path.getsize(model_path)
-    # If file is small (<2KB), it's likely a GitHub LFS pointer, not the real model.
     if file_size < 2000: 
         st.error(f"❌ Error: Model file '{model_path}' is too small ({file_size} bytes).")
         st.warning("""
-        **Diagnosis:** You are likely using Git LFS, but Streamlit Cloud downloaded the pointer file.
+        **Diagnosis:** You are using Git LFS, but Streamlit Cloud downloaded the pointer file.
         
         **Solution:**
-        1. On your PC, run: `git lfs untrack isl_gesture_model.tflite`
-        2. Delete the file from the folder.
-        3. Paste the actual .tflite file back into the folder.
-        4. Run: `git add .` -> `git commit -m "Fixed model"` -> `git push`
+        1. Run `git lfs untrack isl_gesture_model.tflite`
+        2. Delete the file, commit, and push.
+        3. Add the actual file back and push.
         """)
         st.stop()
 
@@ -125,7 +123,7 @@ class VideoProcessor(VideoProcessorBase):
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
             )
         except Exception as e:
-            print(f"Prediction Error: {e}")
+            pass
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -133,7 +131,7 @@ class VideoProcessor(VideoProcessorBase):
 # UI
 # -------------------------
 st.title("🖐️ ISL Gesture Detection – Real Time")
-st.write("Ensuring Tensorflow-CPU compatibility...")
+st.write("Using upgraded drivers for stability...")
 
 webrtc_streamer(
     key="isl-app",
