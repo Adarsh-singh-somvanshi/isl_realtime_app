@@ -1,2 +1,7 @@
-libgl1
-libglib2.0-0
+pkg-config
+libavformat-dev
+libavdevice-dev
+libavfilter-dev
+libavutil-dev
+libswscale-dev
+freeglut3-dev
