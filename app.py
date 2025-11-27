@@ -1,5 +1,5 @@
 import os
-# Set env variables before importing tensorflow/tflite
+# Set env variables before importing tensorflow
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
@@ -7,7 +7,8 @@ import streamlit as st
 import av
 import cv2
 import numpy as np
-import tflite_runtime.interpreter as tflite
+# CHANGED: Use full tensorflow instead of tflite_runtime for Flex Ops support
+import tensorflow as tf
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 import json
 
@@ -49,7 +50,8 @@ def load_model():
     check_model_file(model_path)
     
     try:
-        interpreter = tflite.Interpreter(model_path=model_path)
+        # CHANGED: Use tf.lite.Interpreter which supports Flex Ops automatically
+        interpreter = tf.lite.Interpreter(model_path=model_path)
         interpreter.allocate_tensors()
         input_details = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
@@ -57,6 +59,7 @@ def load_model():
         return interpreter, input_details, output_details, img_size
     except Exception as e:
         st.error(f"Failed to allocate tensors. Error: {e}")
+        st.warning("Ensure 'tensorflow' is in your requirements.txt, not 'tflite-runtime'.")
         st.stop()
 
 interpreter, input_details, output_details, IMG_SIZE = load_model()
