@@ -1,5 +1,5 @@
 import os
-# Set env variables before importing tensorflow
+# Configure environment variables to disable GPU and reduce logs
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
@@ -7,50 +7,47 @@ import streamlit as st
 import av
 import cv2
 import numpy as np
-# CHANGED: Use full tensorflow instead of tflite_runtime for Flex Ops support
-import tensorflow as tf
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 import json
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+
+# NOTE: We do NOT import tensorflow globally here to save startup memory.
+# It is imported inside load_model().
 
 # -------------------------
 # Helper: Check File Integrity
 # -------------------------
 def check_model_file(model_path):
-    """
-    Checks if the model file exists and is not a Git LFS pointer.
-    """
     if not os.path.exists(model_path):
         st.error(f"❌ Error: Model file '{model_path}' not found.")
         st.stop()
     
     file_size = os.path.getsize(model_path)
-    # Git LFS pointers are usually around 130 bytes. Real models are MBs.
+    # Check if it's a Git LFS pointer (usually < 2KB)
     if file_size < 2000: 
         st.error(f"❌ Error: Model file '{model_path}' is too small ({file_size} bytes).")
         st.warning("""
-        **Diagnosis:** You are likely using Git LFS (Large File Storage). 
-        Streamlit Cloud has downloaded the 'LFS Pointer' (a text file) instead of the actual model.
+        **Diagnosis:** You are likely using Git LFS, but Streamlit Cloud downloaded the pointer file.
         
         **Solution:**
-        1. If your model is < 100MB: Remove it from Git LFS and push it as a regular file.
-        2. If your model is > 100MB: You must host it externally (Google Drive/S3) and download it in the code.
+        1. Untrack the file: `git lfs untrack isl_gesture_model.tflite`
+        2. Delete the file, commit, and push.
+        3. Add the actual file back as a regular file and push.
         """)
         st.stop()
-    
-    return True
 
 # -------------------------
-# Load TFLite Model
+# Load Model (Lazy Import Strategy)
 # -------------------------
 @st.cache_resource
 def load_model():
-    model_path = "isl_gesture_model.tflite"
+    # Import TensorFlow HERE to avoid "Segmentation Fault" at app startup
+    import tensorflow as tf
     
-    # Run the check before loading
+    model_path = "isl_gesture_model.tflite"
     check_model_file(model_path)
     
     try:
-        # CHANGED: Use tf.lite.Interpreter which supports Flex Ops automatically
+        # Using tf.lite.Interpreter allows us to use Flex Ops
         interpreter = tf.lite.Interpreter(model_path=model_path)
         interpreter.allocate_tensors()
         input_details = interpreter.get_input_details()
@@ -58,10 +55,10 @@ def load_model():
         img_size = input_details[0]["shape"][1]
         return interpreter, input_details, output_details, img_size
     except Exception as e:
-        st.error(f"Failed to allocate tensors. Error: {e}")
-        st.warning("Ensure 'tensorflow' is in your requirements.txt, not 'tflite-runtime'.")
+        st.error(f"Failed to load model. Error: {e}")
         st.stop()
 
+# Load model (this triggers the function above)
 interpreter, input_details, output_details, IMG_SIZE = load_model()
 
 # -------------------------
@@ -70,8 +67,8 @@ interpreter, input_details, output_details, IMG_SIZE = load_model()
 @st.cache_resource
 def load_labels():
     if not os.path.exists("label_map.json"):
-        st.error("label_map.json not found!")
-        st.stop()
+        st.warning("Warning: label_map.json not found. Using dummy labels.")
+        return {}
         
     with open("label_map.json", "r") as f:
         label_to_idx = json.load(f)
@@ -88,10 +85,13 @@ def detect_hand(frame):
     size = min(h, w)
     cx = w // 2 - size // 2
     cy = h // 2 - size // 2
+    # Ensure crop doesn't go out of bounds
+    cx = max(0, cx)
+    cy = max(0, cy)
     return frame[cy:cy+size, cx:cx+size]
 
 # -------------------------
-# Prediction
+# Prediction Logic
 # -------------------------
 def predict(img):
     img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
@@ -116,19 +116,26 @@ class VideoProcessor(VideoProcessorBase):
         img = cv2.flip(img, 1)
 
         crop = detect_hand(img)
-        label, conf = predict(crop)
-
-        cv2.putText(
-            img, f"{label} ({conf:.2f})", (10, 40),
-            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3
-        )
+        
+        try:
+            label, conf = predict(crop)
+            
+            # Draw result
+            cv2.rectangle(img, (10, 10), (300, 60), (0, 0, 0), -1) # Background for text
+            cv2.putText(
+                img, f"{label} ({conf:.2f})", (20, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+            )
+        except Exception as e:
+            print(f"Prediction Error: {e}")
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # -------------------------
 # UI
 # -------------------------
-st.title("🖐️ ISL Gesture Detection – Real Time (TFLite)")
+st.title("🖐️ ISL Gesture Detection – Real Time")
+st.write("Ensuring Tensorflow-CPU compatibility...")
 
 webrtc_streamer(
     key="isl-app",
