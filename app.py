@@ -1,4 +1,5 @@
 import os
+# Set env variables before importing tensorflow/tflite
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
@@ -11,16 +12,52 @@ from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfigurati
 import json
 
 # -------------------------
+# Helper: Check File Integrity
+# -------------------------
+def check_model_file(model_path):
+    """
+    Checks if the model file exists and is not a Git LFS pointer.
+    """
+    if not os.path.exists(model_path):
+        st.error(f"❌ Error: Model file '{model_path}' not found.")
+        st.stop()
+    
+    file_size = os.path.getsize(model_path)
+    # Git LFS pointers are usually around 130 bytes. Real models are MBs.
+    if file_size < 2000: 
+        st.error(f"❌ Error: Model file '{model_path}' is too small ({file_size} bytes).")
+        st.warning("""
+        **Diagnosis:** You are likely using Git LFS (Large File Storage). 
+        Streamlit Cloud has downloaded the 'LFS Pointer' (a text file) instead of the actual model.
+        
+        **Solution:**
+        1. If your model is < 100MB: Remove it from Git LFS and push it as a regular file.
+        2. If your model is > 100MB: You must host it externally (Google Drive/S3) and download it in the code.
+        """)
+        st.stop()
+    
+    return True
+
+# -------------------------
 # Load TFLite Model
 # -------------------------
 @st.cache_resource
 def load_model():
-    interpreter = tflite.Interpreter(model_path="isl_gesture_model.tflite")
-    interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    img_size = input_details[0]["shape"][1]
-    return interpreter, input_details, output_details, img_size
+    model_path = "isl_gesture_model.tflite"
+    
+    # Run the check before loading
+    check_model_file(model_path)
+    
+    try:
+        interpreter = tflite.Interpreter(model_path=model_path)
+        interpreter.allocate_tensors()
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+        img_size = input_details[0]["shape"][1]
+        return interpreter, input_details, output_details, img_size
+    except Exception as e:
+        st.error(f"Failed to allocate tensors. Error: {e}")
+        st.stop()
 
 interpreter, input_details, output_details, IMG_SIZE = load_model()
 
@@ -29,6 +66,10 @@ interpreter, input_details, output_details, IMG_SIZE = load_model()
 # -------------------------
 @st.cache_resource
 def load_labels():
+    if not os.path.exists("label_map.json"):
+        st.error("label_map.json not found!")
+        st.stop()
+        
     with open("label_map.json", "r") as f:
         label_to_idx = json.load(f)
     idx_to_label = {int(v): k for k, v in label_to_idx.items()}
