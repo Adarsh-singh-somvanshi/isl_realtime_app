@@ -1,19 +1,6 @@
-# UPGRADE: 0.50.1+ fixes the crash with modern av versions
-streamlit-webrtc>=0.50.1
-# UPGRADE: Newer streamlit handles threads better
-streamlit>=1.41.0
-
-# LET PIP DECIDE: Remove 'av==' pinning. 
-# The new streamlit-webrtc will automatically pick a working version of av.
-av
-
-# COMPUTER VISION
+streamlit
+streamlit-webrtc
 opencv-python-headless
-scikit-learn
-
-# CRITICAL COMPATIBILITY:
-# TensorFlow 2.15 crashes if Numpy is 2.0+. We must pin Numpy down.
-numpy<2.0.0
-# Use CPU version to save memory
-tensorflow-cpu==2.15.0
-protobuf==4.25.3
+tensorflow-cpu
+numpy
+av
