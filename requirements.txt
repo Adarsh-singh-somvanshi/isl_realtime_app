@@ -1,10 +1,8 @@
 streamlit==1.38.0
 streamlit-webrtc==0.47.6
 opencv-python-headless==4.10.0.84
-# BUILD FIX: Downgrade Cython so av 10.0.0 can build successfully
-Cython<3
-# STABLE VERSION: av 10.0.0 prevents the runtime crash
-av==10.0.0
+# FIX: av 11.0.0 + packages.txt is the only working combination for Cloud
+av==11.0.0
 # COMPATIBILITY: Numpy must be < 2.0 to avoid TensorFlow crashes
 numpy<2.0.0
 # LIGHTWEIGHT: Use CPU version to save RAM
