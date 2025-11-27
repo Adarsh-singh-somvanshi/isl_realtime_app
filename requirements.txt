@@ -1,9 +1,10 @@
 streamlit==1.38.0
 streamlit-webrtc==0.47.6
-opencv-python-headless==4.7.0.72
+opencv-python-headless==4.10.0.84
 av==12.3.0
-numpy==1.26.4
-tensorflow-cpu
-protobuf>=4.25.3,<5.0.0
+# CRITICAL: Numpy 2.0 causes Segmentation Faults with TF. This prevents the crash.
+numpy<2.0.0
+# Use CPU version to save memory on Cloud
+tensorflow-cpu==2.15.0
+protobuf==4.25.3
 scikit-learn
-
