@@ -1,10 +1,11 @@
 streamlit==1.38.0
 streamlit-webrtc==0.47.6
 opencv-python-headless==4.10.0.84
-# FIX: Use av 10.0.0. It has pre-built wheels so it won't fail to install.
+# STABLE VERSION: av 10.0.0 works best on Cloud.
 av==10.0.0
-# Keep numpy pinned to prevent TensorFlow crashes
+# COMPATIBILITY: Numpy must be < 2.0 to avoid TensorFlow crashes
 numpy<2.0.0
+# LIGHTWEIGHT: Use CPU version to save RAM
 tensorflow-cpu==2.15.0
 protobuf==4.25.3
 scikit-learn
