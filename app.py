@@ -10,8 +10,7 @@ import numpy as np
 import json
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
-# NOTE: We do NOT import tensorflow globally here to save startup memory.
-# It is imported inside load_model().
+# NOTE: We do NOT import tensorflow globally. It is imported inside load_model().
 
 # -------------------------
 # Helper: Check File Integrity
@@ -22,16 +21,17 @@ def check_model_file(model_path):
         st.stop()
     
     file_size = os.path.getsize(model_path)
-    # Check if it's a Git LFS pointer (usually < 2KB)
+    # If file is small (<2KB), it's likely a GitHub LFS pointer, not the real model.
     if file_size < 2000: 
         st.error(f"❌ Error: Model file '{model_path}' is too small ({file_size} bytes).")
         st.warning("""
         **Diagnosis:** You are likely using Git LFS, but Streamlit Cloud downloaded the pointer file.
         
         **Solution:**
-        1. Untrack the file: `git lfs untrack isl_gesture_model.tflite`
-        2. Delete the file, commit, and push.
-        3. Add the actual file back as a regular file and push.
+        1. On your PC, run: `git lfs untrack isl_gesture_model.tflite`
+        2. Delete the file from the folder.
+        3. Paste the actual .tflite file back into the folder.
+        4. Run: `git add .` -> `git commit -m "Fixed model"` -> `git push`
         """)
         st.stop()
 
@@ -47,7 +47,6 @@ def load_model():
     check_model_file(model_path)
     
     try:
-        # Using tf.lite.Interpreter allows us to use Flex Ops
         interpreter = tf.lite.Interpreter(model_path=model_path)
         interpreter.allocate_tensors()
         input_details = interpreter.get_input_details()
@@ -85,7 +84,6 @@ def detect_hand(frame):
     size = min(h, w)
     cx = w // 2 - size // 2
     cy = h // 2 - size // 2
-    # Ensure crop doesn't go out of bounds
     cx = max(0, cx)
     cy = max(0, cy)
     return frame[cy:cy+size, cx:cx+size]
@@ -121,7 +119,7 @@ class VideoProcessor(VideoProcessorBase):
             label, conf = predict(crop)
             
             # Draw result
-            cv2.rectangle(img, (10, 10), (300, 60), (0, 0, 0), -1) # Background for text
+            cv2.rectangle(img, (10, 10), (300, 60), (0, 0, 0), -1) 
             cv2.putText(
                 img, f"{label} ({conf:.2f})", (20, 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
