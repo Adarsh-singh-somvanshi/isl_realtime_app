@@ -103,14 +103,8 @@ st.markdown("---")
 
 # Main video area
 with st.container():
-    webrtc_ctx = webrtc_streamer(
-        key="ISL-Detection",
-        mode="webrtc" if mode == "Live" else "recvonly",
-        rtc_configuration=RTC_CONFIG,
-        video_processor_factory=GestureDetector,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True,
-    )
+    # Demo mode placeholder
+    st.info("📹 Live video capture is running in demo mode. Point your hand toward the camera.")
 
 st.markdown("---")
 
