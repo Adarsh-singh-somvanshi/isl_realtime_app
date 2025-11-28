@@ -1,22 +1,10 @@
-import os
 import streamlit as st
 import cv2
 import numpy as np
-import random
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-import av
-
-# ===========================
-# Streamlit Cloud Configuration
-# ===========================
-RTC_CONFIG = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:global.stun.twilio.com:3478"]},
-        ]
-    }
-)
+import pickle
+import tensorflow as tf
+from PIL import Image
+import io
 
 # ===========================
 # Page Configuration
@@ -29,129 +17,167 @@ st.set_page_config(
 )
 
 # ===========================
-# Sample ISL Gestures (Demo Data)
+# Load Model and Labels
 # ===========================
-ISL_GESTURES = [
-    "Namaste", "Yes", "No", "Hello", "Goodbye", "Thank You",
-    "Sorry", "Love", "Happy", "Sad", "Help", "Water"
-]
+@st.cache_resource
+def load_model():
+    try:
+        interpreter = tf.lite.Interpreter(model_path="isl_gesture_model.tflite")
+        interpreter.allocate_tensors()
+        return interpreter
+    except:
+        return None
 
-# ===========================
-# Video Processor for Real-time Detection
-# ===========================
-class GestureDetector(VideoProcessorBase):
-    def __init__(self):
-        self.gesture_history = []
-        self.counter = 0
-        self.current_gesture = random.choice(ISL_GESTURES)
-        self.confidence = random.uniform(0.7, 0.99)
-    
-    def recv(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        img = cv2.flip(img, 1)  # Mirror effect
-        
-        # Simulate hand detection with rectangle
-        h, w = img.shape[:2]
-        x_start, y_start = w // 4, h // 4
-        x_end, y_end = 3 * w // 4, 3 * h // 4
-        
-        cv2.rectangle(img, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
-        cv2.putText(img, "Hand Detection Area", (x_start + 10, y_start - 10),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Update gesture every 30 frames (simulating detection)
-        self.counter += 1
-        if self.counter % 30 == 0:
-            self.current_gesture = random.choice(ISL_GESTURES)
-            self.confidence = random.uniform(0.7, 0.99)
-            self.gesture_history.append(self.current_gesture)
-        
-        # Display detected gesture
-        if self.confidence > 0.75:
-            cv2.rectangle(img, (10, 10), (400, 80), (0, 0, 0), -1)
-            cv2.putText(img, f"Gesture: {self.current_gesture}",
-                       (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
-            cv2.putText(img, f"Confidence: {self.confidence:.2%}",
-                       (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+@st.cache_resource
+def load_labels():
+    try:
+        with open('label_map.pkl', 'rb') as f:
+            labels = pickle.load(f)
+            if isinstance(labels, dict):
+                return sorted(labels.values())
+            return labels
+    except:
+        # Fallback labels if pickle fails
+        return ["Namaste", "Yes", "No", "Hello", "Goodbye"]
+
+# Load resources
+interpreter = load_model()
+labels = load_labels()
 
 # ===========================
 # Main UI
 # ===========================
-st.title("🖐️ ISL Gesture Recognition - Demo")
+st.markdown("# 🖐️ ISL Gesture Recognition - Live")
 st.markdown("### Real-time Indian Sign Language Gesture Detection")
 
-col1, col2, col3 = st.columns([2, 1, 1])
+# Sidebar for configuration
+with st.sidebar:
+    st.header("⚙️ Settings")
+    confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.7, 0.05)
+    detection_speed = st.select_slider("Detection Speed", ["Slow", "Medium", "Fast"], value="Medium")
+
+# Main layout
+col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.info(
-        "**How it works:**\n"
-        "- Point your hand towards the camera\n"
-        "- The system will detect your gesture\n"
-        "- Results appear with confidence score",
-        icon="ℹ️"
+    st.markdown("#### 📹 Live Camera Feed")
+    
+    # Camera input
+    camera_input = st.camera_input(
+        "Point your hand towards the camera",
+        help="Allow camera access to detect gestures"
     )
+    
+    if camera_input is not None:
+        # Process the captured image
+        image = Image.open(camera_input)
+        image_array = np.array(image)
+        
+        # Convert to BGR for OpenCV
+        if len(image_array.shape) == 3 and image_array.shape[2] == 4:
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_RGBA2BGR)
+        elif len(image_array.shape) == 3 and image_array.shape[2] == 3:
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+        
+        # Resize and preprocess
+        img_resized = cv2.resize(image_array, (224, 224))
+        img_normalized = img_resized.astype('float32') / 255.0
+        img_expanded = np.expand_dims(img_normalized, axis=0)
+        
+        # Run inference if model loaded
+        if interpreter is not None:
+            try:
+                input_details = interpreter.get_input_details()
+                output_details = interpreter.get_output_details()
+                
+                interpreter.set_tensor(input_details[0]['index'], img_expanded)
+                interpreter.invoke()
+                
+                predictions = interpreter.get_tensor(output_details[0]['index'])[0]
+                
+                # Get top prediction
+                top_idx = np.argmax(predictions)
+                confidence = predictions[top_idx]
+                
+                # Display results
+                st.image(camera_input, use_column_width=True, caption="Captured Frame")
+                
+                if confidence >= confidence_threshold:
+                    st.success(f"✅ Detected: **{labels[top_idx]}**")
+                    st.metric("Confidence", f"{confidence*100:.1f}%")
+                else:
+                    st.warning("⚠️ Low confidence - No clear gesture detected")
+                
+                # Show all predictions
+                st.markdown("#### All Predictions:")
+                pred_df = {}
+                for i, label in enumerate(labels):
+                    pred_df[label] = f"{predictions[i]*100:.1f}%"
+                st.json(pred_df)
+                
+            except Exception as e:
+                st.error(f"Error during inference: {str(e)}")
+        else:
+            st.image(camera_input, use_column_width=True)
+            st.warning("⚠️ Model not loaded. Using camera in demo mode.")
+    else:
+        st.info("📷 Click the camera button above to capture a frame")
 
 with col2:
-    mode = st.radio("Mode:", ["Live", "Demo"], horizontal=True)
+    st.markdown("#### 📊 Status")
+    st.metric("App Status", "🟢 Active")
+    st.metric("Model Loaded", "✅ Yes" if interpreter else "❌ No")
+    st.metric("Available Gestures", len(labels))
+    
+    st.markdown("#### 🖐️ Supported Gestures:")
+    for idx, label in enumerate(labels, 1):
+        st.text(f"{idx}. {label}")
 
-with col3:
-    st.metric("Status", "🟢 Active")
-
-st.markdown("---")
-
-# Main video area
-with st.container():
-    # Demo mode placeholder
-    st.info("📹 Live video capture is running in demo mode. Point your hand toward the camera.")
-
-st.markdown("---")
-
-# Info sections
-tab1, tab2, tab3 = st.tabs(["📊 Supported Gestures", "ℹ️ About", "⚙️ Settings"])
+# ===========================
+# Information Tabs
+# ===========================
+tab1, tab2, tab3 = st.tabs(["About", "How It Works", "Settings"])
 
 with tab1:
-    st.write("**Available ISL Gestures:**")
-    cols = st.columns(4)
-    for idx, gesture in enumerate(ISL_GESTURES):
-        with cols[idx % 4]:
-            st.write(f"🤟 {gesture}")
+    st.markdown("""
+    ## About ISL Gesture Recognition
+    
+    This application uses a TensorFlow Lite model to detect and classify Indian Sign Language (ISL) gestures in real-time.
+    
+    ### Features:
+    - 🎥 Live camera input
+    - 🤖 ML-powered gesture detection
+    - 📊 Confidence scoring
+    - ⚡ Real-time processing
+    
+    ### Supported Gestures:
+    """)
+    for label in labels:
+        st.write(f"- {label}")
 
 with tab2:
     st.markdown("""
-    ### About ISL Gesture Recognition
+    ## How It Works
     
-    This application demonstrates real-time gesture recognition for Indian Sign Language (ISL).
+    1. **Camera Capture**: Click the camera button to capture a frame
+    2. **Image Processing**: The image is resized to 224x224 and normalized
+    3. **Model Inference**: TFLite model processes the image
+    4. **Gesture Classification**: Model outputs confidence scores for each gesture
+    5. **Result Display**: The gesture with highest confidence is shown
     
-    **Features:**
-    - 🎥 Real-time video processing via WebRTC
-    - 🤖 Hand gesture detection and classification
-    - 📊 Confidence scoring for predictions
-    - 🌐 Cloud-based deployment (Streamlit Cloud)
-    
-    **Technologies Used:**
-    - Streamlit for web interface
-    - OpenCV for image processing
-    - WebRTC for real-time video streaming
-    - TensorFlow Lite for gesture recognition (production version)
+    ### Tips for Better Detection:
+    - ✋ Ensure your hand is clearly visible
+    - 💡 Use good lighting conditions
+    - 📐 Keep hand in center of frame
+    - 🎯 Hold gesture steady while capturing
     """)
 
 with tab3:
-    st.write("**Application Settings:**")
-    confidence_threshold = st.slider("Confidence Threshold:", 0.5, 0.99, 0.75)
-    detection_speed = st.select_slider(
-        "Detection Speed:",
-        options=["Slow", "Medium", "Fast"],
-        value="Medium"
-    )
-    st.write(f"✓ Threshold: {confidence_threshold:.2%}")
-    st.write(f"✓ Speed: {detection_speed}")
+    st.markdown("## Configuration Options")
+    st.write(f"**Current Confidence Threshold**: {confidence_threshold*100:.0f}%")
+    st.write(f"**Detection Speed**: {detection_speed}")
+    st.write(f"**Total Gestures**: {len(labels)}")
 
+# Footer
 st.markdown("---")
-st.markdown(
-    "<p style='text-align: center; color: gray;'>"
-    "🚀 ISL Recognition | Powered by Streamlit | 2025"
-    "</p>",
-    unsafe_allow_html=True
-)
+st.markdown("🚀 ISL Recognition | Powered by Streamlit & TensorFlow | 2025")
