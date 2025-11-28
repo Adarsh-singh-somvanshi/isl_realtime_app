@@ -110,7 +110,7 @@ with st.container():
         video_processor_factory=GestureDetector,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
-        realtime_transform=True,
+        =True,
     )
 
 st.markdown("---")
