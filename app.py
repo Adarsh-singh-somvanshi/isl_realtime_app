@@ -1,184 +1,188 @@
 import streamlit as st
 import cv2
 import numpy as np
+import mediapipe as mp
+import pickle
+from collections import deque
 import tensorflow as tf
-from PIL import Image
-import time
-
-# ===========================
-# ISL Gesture Labels
-# ===========================
-ISL_GESTURES = [
-    "help_you",                # 0
-    "congratulation",          # 1
-    "hi_how_are_you",          # 2
-    "i_am_hungry",             # 3
-    "take_care_of_yourself"    # 4
-]
 
 # ===========================
 # Page Config
 # ===========================
 st.set_page_config(
-    page_title="ISL Real-Time Detection",
+    page_title="ISL Live Translation",
     page_icon="🖐️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ===========================
-# Load Model
+# Load Resources
 # ===========================
 @st.cache_resource
-def load_model():
-    """Load TensorFlow Lite model"""
+def load_resources():
     try:
-        interpreter = tf.lite.Interpreter(model_path="isl_gesture_model.tflite")
-        interpreter.allocate_tensors()
-        return interpreter, True
+        # Load MediaPipe Holistic
+        mp_holistic = mp.solutions.holistic
+        mp_drawing = mp.solutions.drawing_utils
+        holistic = mp_holistic.Holistic(
+            static_image_mode=False,
+            model_complexity=1,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            refine_face_landmarks=False
+        )
+        
+        # Load label map
+        with open('label_map.pkl', 'rb') as f:
+            label_map = pickle.load(f)
+        
+        idx_to_label = {v: k for k, v in label_map.items()}
+        
+        # Load LSTM model
+        model = tf.keras.models.load_model('isl_gesture_model.h5')
+        
+        return holistic, mp_drawing, mp_holistic, idx_to_label, model, True
     except Exception as e:
-        return None, False
+        st.error(f"Error loading resources: {e}")
+        return None, None, None, None, None, False
 
-interpreter, model_loaded = load_model()
-
-if model_loaded and interpreter is not None:
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
+holistic, mp_drawing, mp_holistic, idx_to_label, model, resources_loaded = load_resources()
 
 # ===========================
-# Preprocess Function
+# Feature Extraction
 # ===========================
-def preprocess_frame(frame):
-    """Preprocess frame for model inference - FIXED"""
-    try:
-        # Convert to RGB if needed
-        if len(frame.shape) == 2:
-            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-        elif frame.shape[2] == 4:
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
-        elif frame.shape[2] == 3:
-            if len(frame.shape) == 3 and frame.shape[2] == 3:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Resize to 224x224
-        frame_resized = cv2.resize(frame, (224, 224))
-        
-        # Normalize to [0, 1]
-        frame_normalized = frame_resized.astype('float32') / 255.0
-        
-        # Add batch dimension: (1, 224, 224, 3)
-        frame_expanded = np.expand_dims(frame_normalized, axis=0)
-        
-        return frame_expanded
-    except Exception as e:
-        return None
-
-def predict_gesture(frame):
-    """Predict gesture from frame"""
-    if not model_loaded or interpreter is None:
-        return None, None, None
+def extract_features(results, FEATURE_SIZE=138):
+    """Extract hand landmarks for gesture recognition"""
+    vec = []
     
-    try:
-        # Preprocess
-        img_input = preprocess_frame(frame)
-        if img_input is None:
-            return None, None, None
-        
-        # Set tensor and invoke
-        interpreter.set_tensor(input_details[0]['index'], img_input)
-        interpreter.invoke()
-        
-        # Get output
-        predictions = interpreter.get_tensor(output_details[0]['index'])[0]
-        
-        # Get top prediction
-        top_idx = np.argmax(predictions)
-        confidence = float(predictions[top_idx])
-        
-        return top_idx, confidence, predictions
-    except Exception as e:
-        return None, None, None
+    if results.left_hand_landmarks:
+        for lm in results.left_hand_landmarks.landmark:
+            vec.extend([lm.x, lm.y, lm.z])
+    else:
+        vec.extend([0.0] * 21 * 3)
+    
+    if results.right_hand_landmarks:
+        for lm in results.right_hand_landmarks.landmark:
+            vec.extend([lm.x, lm.y, lm.z])
+    else:
+        vec.extend([0.0] * 21 * 3)
+    
+    return np.array(vec, dtype=float) if len(vec) == FEATURE_SIZE else np.zeros(FEATURE_SIZE, dtype=float)
 
 # ===========================
 # Main UI
 # ===========================
-st.markdown("# 🖐️ ISL Real-Time Gesture Recognition")
-st.markdown("### Live Translation of Indian Sign Language")
+st.markdown("# 🖐️ ISL Live Real-Time Translation")
+st.markdown("### Continuous Hand Gesture Recognition with Live Webcam")
 
-# Sidebar Settings
+if not resources_loaded:
+    st.error("❌ Failed to load resources. Check if model files exist.")
+    st.stop()
+
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
-    confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.6, step=0.05)
-    show_all_predictions = st.checkbox("Show All Predictions", value=True)
-    
+    confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.5, step=0.05)
+    sequence_length = st.slider("Sequence Length", 10, 50, 30, step=5)
     st.markdown("---")
-    st.markdown("### 📋 Supported Gestures")
-    for i, gesture in enumerate(ISL_GESTURES, 1):
-        st.write(f"**{i}. {gesture.replace('_', ' ').title()}**")
+    st.markdown("### 📋 Gesture Label Map")
+    if idx_to_label:
+        for idx, label in idx_to_label.items():
+            st.write(f"**{idx}. {label.replace('_', ' ').title()}**")
 
-# Main layout
+# Main Content
 col1, col2 = st.columns([2.5, 1.5])
 
 with col1:
     st.subheader("📹 Live Camera Feed")
     
-    if model_loaded:
-        # Camera input
-        camera_frame = st.camera_input("Point your hand towards camera")
+    # Use WebRTC for live streaming
+    from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+    import av
+    
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
+    
+    class VideoProcessor:
+        def __init__(self):
+            self.buffer = deque(maxlen=sequence_length)
+            self.last_prediction = None
+            self.last_confidence = 0.0
         
-        if camera_frame is not None:
-            # Convert to numpy array
-            image = Image.open(camera_frame)
-            image_np = np.array(image)
+        def recv(self, frame):
+            img = frame.to_ndarray(format="bgr24")
             
-            # Display frame
-            st.image(image_np, use_column_width=True, channels="RGB", caption="Captured Frame")
+            # Process with MediaPipe
+            results = holistic.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             
-            # Make prediction
-            top_idx, confidence, predictions = predict_gesture(image_np)
+            # Extract features
+            features = extract_features(results)
+            self.buffer.append(features)
             
-            if top_idx is not None and confidence is not None:
-                gesture_name = ISL_GESTURES[top_idx].replace('_', ' ').title()
+            # Make prediction if buffer is full
+            if len(self.buffer) == sequence_length:
+                input_data = np.array(list(self.buffer))[np.newaxis, ...]
+                predictions = model.predict(input_data, verbose=0)[0]
+                top_idx = np.argmax(predictions)
+                confidence = float(predictions[top_idx])
                 
-                st.markdown("---")
-                
-                # Display result
-                if confidence >= confidence_threshold:
-                    st.success(f"✅ **DETECTED: {gesture_name}**")
-                    st.metric("Confidence", f"{confidence*100:.1f}%", delta="Above threshold")
-                else:
-                    st.warning(f"⚠️ **LOW CONFIDENCE: {gesture_name}**")
-                    st.metric("Confidence", f"{confidence*100:.1f}%", delta="Below threshold")
-                
-                # All predictions
-                if show_all_predictions and predictions is not None:
-                    st.markdown("#### 📊 All Predictions")
-                    for i, pred in enumerate(predictions):
-                        pred_value = float(pred)
-                        bar_label = f"{i+1}. {ISL_GESTURES[i].replace('_', ' ').title()}"
-                        st.progress(min(pred_value, 1.0), text=bar_label)
-            else:
-                st.error("❌ Error in gesture detection")
-        else:
-            st.info("📷 Click camera button to capture and detect gesture")
-    else:
-        st.error("⚠️ Model not loaded. Ensure isl_gesture_model.tflite exists in the directory.")
+                if confidence > confidence_threshold:
+                    self.last_prediction = idx_to_label.get(top_idx, "Unknown")
+                    self.last_confidence = confidence
+            
+            # Draw landmarks
+            if results.left_hand_landmarks:
+                mp_drawing.draw_landmarks(
+                    img,
+                    results.left_hand_landmarks,
+                    mp_holistic.HAND_CONNECTIONS
+                )
+            
+            if results.right_hand_landmarks:
+                mp_drawing.draw_landmarks(
+                    img,
+                    results.right_hand_landmarks,
+                    mp_holistic.HAND_CONNECTIONS
+                )
+            
+            # Add prediction text
+            if self.last_prediction:
+                text = f"{self.last_prediction} ({self.last_confidence:.2f})"
+                cv2.putText(img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+    
+    webrtc_ctx = webrtc_streamer(
+        key="ISL-live-translation",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=rtc_configuration,
+        video_processor_factory=VideoProcessor,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+        media_stream_constraints_options={"max_width": 1280},
+    )
 
 with col2:
-    st.subheader("📊 Status")
+    st.subheader("📊 Live Translation")
     
-    if model_loaded:
-        st.metric("Status", "🟢 Ready", help="Model loaded successfully")
-        st.metric("Model", "✅ Yes", help="TensorFlow Lite model")
+    # Real-time translation display
+    if webrtc_ctx.state.playing:
+        st.info("📹 Webcam is running - position your hand in frame")
+        st.metric("Status", "🟊 Live", help="Camera streaming")
     else:
-        st.metric("Status", "🔴 Error", help="Model failed to load")
-        st.metric("Model", "❌ No", help="Check model file")
+        st.warning("⚠️ Webcam not started")
+        st.metric("Status", "🔴 Waiting", help="Start camera to begin")
     
-    st.metric("Gestures", len(ISL_GESTURES), help="Total supported gestures")
+    st.markdown("#### Latest Prediction")
+    placeholder_text = st.empty()
+    placeholder_conf = st.empty()
     
-    st.markdown("#### ✨ Supported")
-    for i, g in enumerate(ISL_GESTURES, 1):
-        st.write(f"**{i}. {g.replace('_', ' ').title()}**")
+    # Update placeholders with real predictions from VideoProcessor
+    if webrtc_ctx.state.playing:
+        # This will be updated continuously by the VideoProcessor
+        placeholder_text.success("Listening...") if webrtc_ctx else None
 
 st.markdown("---")
-st.markdown("🚀 Real-Time ISL Recognition | Powered by Streamlit & TensorFlow Lite")
+st.markdown("🚀 Real-Time ISL Translation | Powered by Streamlit, MediaPipe & TensorFlow LSTM")
