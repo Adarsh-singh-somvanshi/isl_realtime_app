@@ -1,11 +1,20 @@
 import streamlit as st
 import cv2
 import numpy as np
+import mediapipe as mp
 import pickle
+from collections import deque
 import tensorflow as tf
-from PIL import Image
-import warnings
-warnings.filterwarnings('ignore')
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration, WebRtcStreamerState
+import av
+import threading
+
+# ===========================
+# Configuration
+# ===========================
+SEQUENCE_LENGTH = 30
+FEATURE_SIZE = 138
+CONFIDENCE_THRESHOLD = 0.5
 
 # ===========================
 # Page Config
@@ -18,43 +27,73 @@ st.set_page_config(
 )
 
 # ===========================
-# Load Model & Resources
+# Load Resources
 # ===========================
 @st.cache_resource
-def load_model_and_labels():
+def load_resources():
     try:
-        # Load LSTM model
-        model = tf.keras.models.load_model('isl_gesture_model.h5')
+        mp_holistic = mp.solutions.holistic
+        mp_drawing = mp.solutions.drawing_utils
+        holistic = mp_holistic.Holistic(
+            static_image_mode=False,
+            model_complexity=1,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            refine_face_landmarks=False
+        )
         
         # Load label map
         with open('label_map.pkl', 'rb') as f:
             label_map = pickle.load(f)
         
-        # Create idx to label mapping
         idx_to_label = {v: k for k, v in label_map.items()}
         
-        return model, idx_to_label, True
+        # Load LSTM model
+        model = tf.keras.models.load_model('isl_gesture_model.h5')
+        
+        return holistic, mp_drawing, mp_holistic, idx_to_label, model, True
     except Exception as e:
         st.error(f"Error loading resources: {e}")
-        return None, None, False
+        return None, None, None, None, None, False
 
-model, idx_to_label, model_loaded = load_model_and_labels()
+holistic, mp_drawing, mp_holistic, idx_to_label, model, resources_loaded = load_resources()
 
 # ===========================
-# Main UI
+# Feature Extraction
+# ===========================
+def extract_features(results, FEATURE_SIZE=138):
+    """Extract hand landmarks for gesture recognition"""
+    vec = []
+    
+    if results.left_hand_landmarks:
+        for lm in results.left_hand_landmarks.landmark:
+            vec.extend([lm.x, lm.y, lm.z])
+    else:
+        vec.extend([0.0] * 21 * 3)
+    
+    if results.right_hand_landmarks:
+        for lm in results.right_hand_landmarks.landmark:
+            vec.extend([lm.x, lm.y, lm.z])
+    else:
+        vec.extend([0.0] * 21 * 3)
+    
+    return np.array(vec, dtype=float) if len(vec) == FEATURE_SIZE else np.zeros(FEATURE_SIZE, dtype=float)
+
+# ===========================
+# UI
 # ===========================
 st.markdown("# 🖐️ ISL Live Real-Time Translation")
-st.markdown("### Continuous Gesture Recognition")
+st.markdown("### Continuous Hand Gesture Recognition")
 
-if not model_loaded:
-    st.error("❌ Failed to load model. Check if model files exist.")
-    st.info("Expected files: isl_gesture_model.h5, label_map.pkl")
+if not resources_loaded:
+    st.error("❌ Failed to load resources. Check if model files exist.")
     st.stop()
 
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
     confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.5, step=0.05)
+    sequence_length = st.slider("Sequence Length (frames)", 10, 50, 30, step=5)
     
     st.markdown("---")
     st.markdown("### 📋 Supported Gestures")
@@ -63,64 +102,92 @@ with st.sidebar:
             label = idx_to_label[idx]
             st.write(f"**{idx}. {label.replace('_', ' ').title()}**")
 
-# Main layout
-col1, col2 = st.columns([2.5, 1.5])
+# Main Content
+st.subheader("📹 Live Camera Stream")
+st.info("🔟 Position your hand in front of the camera. The app will detect and recognize gestures in real-time.")
 
-with col1:
-    st.subheader("📷 Capture Gesture")
-    st.info("💡 Click the camera button below to capture your gesture. The app will analyze the hand position and predict the gesture.")
+# WebRTC Configuration
+rtc_configuration = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
+
+class GestureDetectionProcessor:
+    def __init__(self):
+        self.buffer = deque(maxlen=sequence_length)
+        self.last_prediction = None
+        self.last_confidence = 0.0
+        self.frame_count = 0
     
-    # Camera input - works on Streamlit Cloud
-    camera_frame = st.camera_input("Point your hand towards camera")
-    
-    if camera_frame is not None:
-        # Convert to numpy array
-        image = Image.open(camera_frame)
-        image_np = np.array(image)
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        h, w, c = img.shape
         
-        # Display captured frame
-        st.image(image_np, use_column_width=True, channels="RGB", caption="Captured Frame")
+        # Process with MediaPipe
+        results = holistic.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         
-        st.markdown("---")
+        # Extract features
+        features = extract_features(results)
+        self.buffer.append(features)
+        self.frame_count += 1
         
-        # Placeholder for model inference message
-        st.info("📊 Model Analysis:")
-        st.write("The LSTM model would analyze hand landmarks from MediaPipe to predict the gesture.")
-        st.write("This requires real-time hand tracking which works best with a local deployment.")
-        st.markdown("""\n**For best results:**
-- Run locally: `streamlit run app.py`
-- Ensure webcam is available
-- Install all dependencies: `pip install -r requirements.txt`
-        """)
-    else:
-        st.info("📷 Click camera button to capture and detect gesture")
+        # Make prediction if buffer is full
+        if len(self.buffer) == sequence_length:
+            try:
+                input_data = np.array(list(self.buffer))[np.newaxis, ...]
+                predictions = model.predict(input_data, verbose=0)[0]
+                top_idx = np.argmax(predictions)
+                conf = float(predictions[top_idx])
+                
+                if conf > confidence_threshold:
+                    self.last_prediction = idx_to_label.get(top_idx, "Unknown")
+                    self.last_confidence = conf
+            except:
+                pass
+        
+        # Draw landmarks
+        if results.left_hand_landmarks:
+            mp_drawing.draw_landmarks(
+                img,
+                results.left_hand_landmarks,
+                mp_holistic.HAND_CONNECTIONS,
+                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
+            )
+        
+        if results.right_hand_landmarks:
+            mp_drawing.draw_landmarks(
+                img,
+                results.right_hand_landmarks,
+                mp_holistic.HAND_CONNECTIONS,
+                mp_drawing.DrawingSpec(color=(255, 0, 0), thickness=2, circle_radius=2),
+                mp_drawing.DrawingSpec(color=(255, 0, 0), thickness=2)
+            )
+        
+        # Display prediction on frame
+        if self.last_prediction:
+            text = f"{self.last_prediction.title()} ({self.last_confidence:.2f})"
+            cv2.putText(img, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+        
+        # Display frame count
+        cv2.putText(img, f"Frames: {self.frame_count}", (10, h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-with col2:
-    st.subheader("📊 Status")
-    
-    # Model status
-    if model_loaded:
-        st.metric("Model", "✅ Loaded", help="LSTM model ready")
-        st.metric("Gestures", len(idx_to_label) if idx_to_label else 0, help="Total supported gestures")
-    else:
-        st.metric("Model", "❌ Error", help="Failed to load model")
-    
-    st.markdown("#### 📌 Deployment Info")
-    st.warning("""⚠️ **Streamlit Cloud Limitation:**
-    
-Live WebRTC streaming is not available on Streamlit Cloud. For full live translation:
+webrtc_ctx = webrtc_streamer(
+    key="ISL-live",
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration=rtc_configuration,
+    video_processor_factory=GestureDetectionProcessor,
+    media_stream_constraints={"audio": False, "video": True},
+    async_processing=True,
+)
 
-**Run Locally:**
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-This enables:
-✅ Live webcam streaming
-✅ Real-time hand detection
-✅ Continuous gesture recognition
-    """)
+# Status
+if webrtc_ctx.state.playing:
+    st.success("✅ **Camera is LIVE - Point your hand in front of camera**")
+    st.info("🔏 The app is continuously analyzing your hand gestures in real-time.")
+else:
+    st.warning("⚠️ Start the camera to begin gesture detection")
 
 st.markdown("---")
-st.markdown("🚀 ISL Translation | Run locally for live streaming | Powered by Streamlit & TensorFlow LSTM")
+st.markdown("🚀 Real-Time ISL Translation | Powered by Streamlit, MediaPipe & TensorFlow LSTM")
