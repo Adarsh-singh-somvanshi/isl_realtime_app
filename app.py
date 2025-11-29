@@ -2,7 +2,6 @@ import streamlit as st
 import cv2
 import numpy as np
 import mediapipe as mp
-import pickle
 from collections import deque
 import tensorflow as tf
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration, WebRtcStreamerState
@@ -42,21 +41,41 @@ def load_resources():
             refine_face_landmarks=False
         )
         
-        # Load label map
-        with open('label_map.pkl', 'rb') as f:
-            label_map = pickle.load(f)
+        # Load label map from text file
+        label_map = {}
+        try:
+            with open('label_map.txt', 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        parts = line.split(' ', 1)
+                        if len(parts) == 2:
+                            idx, label = parts
+                            label_map[int(idx)] = label
+        except:
+            # Fallback label map
+            label_map = {
+                0: 'help_you',
+                1: 'congratulation',
+                2: 'hi_how_are_you',
+                3: 'i_am_hungry',
+                4: 'take_care_of_yourself'
+            }
         
         idx_to_label = {v: k for k, v in label_map.items()}
         
-        # Load LSTM model
-        model = tf.keras.models.load_model('isl_gesture_model.h5')
+        # Load TensorFlow Lite model
+        interpreter = tf.lite.Interpreter(model_path='isl_gesture_model.tflite')
+        interpreter.allocate_tensors()
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
         
-        return holistic, mp_drawing, mp_holistic, idx_to_label, model, True
+        return holistic, mp_drawing, mp_holistic, idx_to_label, interpreter, input_details, output_details, True
     except Exception as e:
         st.error(f"Error loading resources: {e}")
-        return None, None, None, None, None, False
+        return None, None, None, None, None, None, None, False
 
-holistic, mp_drawing, mp_holistic, idx_to_label, model, resources_loaded = load_resources()
+holistic, mp_drawing, mp_holistic, idx_to_label, interpreter, input_details, output_details, resources_loaded = load_resources()
 
 # ===========================
 # Feature Extraction
@@ -77,7 +96,7 @@ def extract_features(results, FEATURE_SIZE=138):
     else:
         vec.extend([0.0] * 21 * 3)
     
-    return np.array(vec, dtype=float) if len(vec) == FEATURE_SIZE else np.zeros(FEATURE_SIZE, dtype=float)
+    return np.array(vec, dtype=np.float32) if len(vec) == FEATURE_SIZE else np.zeros(FEATURE_SIZE, dtype=np.float32)
 
 # ===========================
 # UI
@@ -117,7 +136,7 @@ class GestureDetectionProcessor:
         self.last_prediction = None
         self.last_confidence = 0.0
         self.frame_count = 0
-    
+        
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         h, w, c = img.shape
@@ -133,16 +152,18 @@ class GestureDetectionProcessor:
         # Make prediction if buffer is full
         if len(self.buffer) == sequence_length:
             try:
-                input_data = np.array(list(self.buffer))[np.newaxis, ...]
-                predictions = model.predict(input_data, verbose=0)[0]
+                input_data = np.array(list(self.buffer), dtype=np.float32)[np.newaxis, ...]
+                interpreter.set_tensor(input_details[0]['index'], input_data)
+                interpreter.invoke()
+                predictions = interpreter.get_tensor(output_details[0]['index'])[0]
                 top_idx = np.argmax(predictions)
                 conf = float(predictions[top_idx])
                 
                 if conf > confidence_threshold:
                     self.last_prediction = idx_to_label.get(top_idx, "Unknown")
                     self.last_confidence = conf
-            except:
-                pass
+            except Exception as e:
+                st.warning(f"Prediction error: {e}")
         
         # Draw landmarks
         if results.left_hand_landmarks:
@@ -190,4 +211,4 @@ else:
     st.warning("⚠️ Start the camera to begin gesture detection")
 
 st.markdown("---")
-st.markdown("🚀 Real-Time ISL Translation | Powered by Streamlit, MediaPipe & TensorFlow LSTM")
+st.markdown("🚀 Real-Time ISL Translation | Powered by Streamlit, MediaPipe & TensorFlow Lite")
