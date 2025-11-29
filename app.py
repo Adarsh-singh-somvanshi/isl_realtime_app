@@ -9,11 +9,11 @@ import time
 # ISL Gesture Labels (CORRECT)
 # ===========================
 ISL_GESTURES = [
-    "Namaste",    # 0
-    "Yes",        # 1
-    "No",         # 2
-    "Hello",      # 3
-    "Goodbye"     # 4
+    "help_you",  # 0
+    "congratulation",  # 1
+    "hi_how_are_you",  # 2
+    "i_am_hungry",  # 3
+    "take_care_of_yourself"  # 4
 ]
 
 # ===========================
