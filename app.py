@@ -6,7 +6,6 @@ from collections import deque
 import tensorflow as tf
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration, WebRtcStreamerState
 import av
-import threading
 
 # ===========================
 # Configuration
@@ -41,19 +40,49 @@ def load_resources():
             refine_face_landmarks=False
         )
         
-        # Load label map from text file
+        # Load label map - try multiple file formats
         label_map = {}
+        label_to_idx = {}
+        
+        # Try to load from label_map_updated.txt first
         try:
-            with open('label_map.txt', 'r') as f:
+            with open('label_map_updated.txt', 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line:
-                        parts = line.split(' ', 1)
+                        parts = line.rsplit(' ', 1)  # Split from right to handle multi-word labels
                         if len(parts) == 2:
-                            idx, label = parts
-                            label_map[int(idx)] = label
-        except:
-            # Fallback label map
+                            label, idx_str = parts
+                            try:
+                                idx = int(idx_str)
+                                label_map[idx] = label
+                                label_to_idx[label] = idx
+                            except ValueError:
+                                pass
+        except FileNotFoundError:
+            pass
+        
+        # Try label_map.txt if first file not found
+        if not label_map:
+            try:
+                with open('label_map.txt', 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            parts = line.rsplit(' ', 1)
+                            if len(parts) == 2:
+                                label, idx_str = parts
+                                try:
+                                    idx = int(idx_str)
+                                    label_map[idx] = label
+                                    label_to_idx[label] = idx
+                                except ValueError:
+                                    pass
+            except FileNotFoundError:
+                pass
+        
+        # Fallback hardcoded label map
+        if not label_map:
             label_map = {
                 0: 'help_you',
                 1: 'congratulation',
@@ -61,8 +90,7 @@ def load_resources():
                 3: 'i_am_hungry',
                 4: 'take_care_of_yourself'
             }
-        
-        idx_to_label = {v: k for k, v in label_map.items()}
+            label_to_idx = {v: k for k, v in label_map.items()}
         
         # Load TensorFlow Lite model
         interpreter = tf.lite.Interpreter(model_path='isl_gesture_model.tflite')
@@ -70,12 +98,12 @@ def load_resources():
         input_details = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
         
-        return holistic, mp_drawing, mp_holistic, idx_to_label, interpreter, input_details, output_details, True
+        return holistic, mp_drawing, mp_holistic, label_map, label_to_idx, interpreter, input_details, output_details, True
     except Exception as e:
         st.error(f"Error loading resources: {e}")
-        return None, None, None, None, None, None, None, False
+        return None, None, None, None, None, None, None, None, False
 
-holistic, mp_drawing, mp_holistic, idx_to_label, interpreter, input_details, output_details, resources_loaded = load_resources()
+holistic, mp_drawing, mp_holistic, label_map, label_to_idx, interpreter, input_details, output_details, resources_loaded = load_resources()
 
 # ===========================
 # Feature Extraction
@@ -116,10 +144,10 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### 📋 Supported Gestures")
-    if idx_to_label:
-        for idx in sorted(idx_to_label.keys()):
-            label = idx_to_label[idx]
-            st.write(f"**{idx}. {label.replace('_', ' ').title()}**")
+    if label_map:
+        for idx in sorted(label_map.keys()):
+            gesture_name = label_map[idx].replace('_', ' ').title()
+            st.write(f"**{idx}. {gesture_name}**")
 
 # Main Content
 st.subheader("📹 Live Camera Stream")
@@ -160,10 +188,10 @@ class GestureDetectionProcessor:
                 conf = float(predictions[top_idx])
                 
                 if conf > confidence_threshold:
-                    self.last_prediction = idx_to_label.get(top_idx, "Unknown")
+                    self.last_prediction = label_map.get(top_idx, "Unknown")
                     self.last_confidence = conf
             except Exception as e:
-                st.warning(f"Prediction error: {e}")
+                pass
         
         # Draw landmarks
         if results.left_hand_landmarks:
