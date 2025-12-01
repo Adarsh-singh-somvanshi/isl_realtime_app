@@ -1,0 +1,39 @@
+name: isl_realtime_mobile
+description: ISL real-time camera translation using TensorFlow Lite.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # ML & Computer Vision
+  camera: ^0.11.0+1
+  tflite_flutter: ^0.10.4
+  tflite_flutter_helper: ^0.4.4
+  
+  # State Management
+  provider: ^6.1.2
+  
+  # UI & Animations
+  lottie: ^3.1.2
+  
+  # Persistence
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/model/isl_gesture_model.tflite
+    - assets/model/labels.json
+    - assets/animations/intro.json
